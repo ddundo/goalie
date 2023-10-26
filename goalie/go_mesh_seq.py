@@ -190,11 +190,11 @@ class GoalOrientedMeshSeq(AdjointMeshSeq):
                     f" {type(forms)}."
                 )
 
-            # Loop over each strongly coupled field
-            for f in self.fields:
-                # Loop over each timestep
-                for j in range(len(sols[f]["forward"][i])):
-                    # Update fields
+            # Loop over each timestep
+            for j in range(len(sols[f]["forward"][i])):
+
+                # Update each field
+                for f in self.fields:
                     transfer(sols[f][FWD][i][j], u[f])
                     transfer(sols[f][FWD_OLD][i][j], u_[f])
                     transfer(sols[f][ADJ][i][j], u_star[f])
@@ -207,13 +207,10 @@ class GoalOrientedMeshSeq(AdjointMeshSeq):
                     )
                     u_star_e[f] -= u_star[f]
 
-                    # Evaluate error indicator
-                    indi_e = indicator_fn(forms[f], u_star_e[f])
-
-                    # Project back to the base space
-                    indi = project(indi_e, P0_spaces[i])
-                    indi.interpolate(abs(indi))
-                    indicators[f][i][j].interpolate(ufl.max_value(indi, 1.0e-16))
+                # Evaluate each error indicator and project back to the base space
+                for f in self.fields:
+                    indi = project(indicator_fn(forms[f], u_star_e[f]), P0_spaces[i])
+                    indicators[f][i][j].interpolate(ufl.max_value(abs(indi), 1.0e-16))
 
         return sols, indicators
 
