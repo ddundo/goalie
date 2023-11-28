@@ -179,8 +179,8 @@ class GoalOrientedMeshSeq(AdjointMeshSeq):
                     f" {type(forms)}."
                 )
 
-            # Loop over each timestep
-            for j in range(len(sols[f]["forward"][i])):
+            # Loop over each export
+            for j in range(self.time_partition.num_exports_per_subinterval[i] - 1):
 
                 # Update each field
                 for f in self.fields:
