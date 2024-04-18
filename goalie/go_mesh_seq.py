@@ -178,15 +178,21 @@ class GoalOrientedMeshSeq(AdjointMeshSeq):
                 u_star_e[f] = Function(fs_e)
 
             # Get forms for each equation in enriched space
-            forms = enriched_mesh_seq.form(i, mapping)
-            if not isinstance(forms, dict):
-                raise TypeError(
-                    "The function defined by get_form should return a dictionary"
-                    f", not type '{type(forms)}'."
-                )
+            # forms = enriched_mesh_seq.form(i, mapping)
+            # if not isinstance(forms, dict):
+            #     raise TypeError(
+            #         "The function defined by get_form should return a dictionary"
+            #         f", not type '{type(forms)}'."
+            #     )
 
             # Loop over each timestep
             for j in range(self.time_partition.num_exports_per_subinterval[i] - 1):
+                tp = self.time_partition
+                time = (
+                    tp.subintervals[i][0]
+                    + (j + 1) * tp.timesteps[i] * tp.num_timesteps_per_export[i]
+                )
+                forms = enriched_mesh_seq.form(i, mapping, err_ind_time=time)
                 # Loop over each strongly coupled field
                 for f in self.fields:
                     # Transfer solutions associated to the current field
