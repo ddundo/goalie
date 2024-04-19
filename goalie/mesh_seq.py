@@ -881,7 +881,7 @@ class MeshSeq:
                 adaptor(self, i, **adaptor_kwargs)
 
                 # TODO: check convergence
-                converged = True
+                # self.converged[i] = True
 
                 # Update function spaces, TODO: tidy up
                 self.solutions.fly_update(i, self.function_spaces)
@@ -941,7 +941,7 @@ class MeshSeq:
                 # Clear the tape to reduce the memory footprint
                 pyadjoint.get_working_tape().clear_tape()
 
-                if converged:
+                if self.converged[i]:
                     break
 
             checkpoint = next_checkpoint
