@@ -24,10 +24,11 @@ effectivity index can be computed.
     Proceedings of the 28th International
     Meshing Roundtable (2020).
 """
-from firedrake import *
-from goalie.math import bessk0
-import numpy as np
 
+import numpy as np
+from firedrake import *
+
+from goalie.math import bessk0
 
 # Problem setup
 n = 0
@@ -92,7 +93,7 @@ def get_form(self):
             - dot(u, grad(c)) * psi * dx
             - inner(D * grad(c), grad(psi)) * dx
         )
-        return F
+        return {"tracer_3d": F}
 
     return form
 
@@ -124,7 +125,7 @@ def get_solver(self):
         c.assign(ic["tracer_3d"])
 
         # Setup variational problem
-        F = self.form(i, {"tracer_3d": (c, c)})
+        F = self.form(i, {"tracer_3d": (c, c)})["tracer_3d"]
         bc = self.bcs(i)
 
         # Solve
