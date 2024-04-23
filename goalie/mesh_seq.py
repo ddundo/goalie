@@ -192,6 +192,26 @@ class MeshSeq:
                 )
             debug(100 * "-")
 
+        Rs = [firedrake.FunctionSpace(mesh, "R", 0) for mesh in meshes]
+        self._time = [firedrake.Function(R) for R in Rs]
+        # self._time = [
+        #         ffunc.Function(ffs.FunctionSpace(mesh, "R", 0)) for mesh in meshes
+        #     ]
+
+    def get_time(self, subinterval):
+        """
+        Get the time :class:`~.Function` associated with a given subinterval,
+        initialised to the value at the start of the subinterval, plus one timestep.
+        :arg subinterval: the subinterval index
+        :type subinterval: :class:`int`
+        :return: the associated $R$-space time Function
+        :rtype: :class:`~.Function`
+        """
+        start_time = self.time_partition[subinterval].start_time
+        dt = self.time_partition.timesteps[subinterval]
+        self._time[subinterval].assign(start_time + dt)
+        return self._time[subinterval]
+
     def plot(self, fig=None, axes=None, **kwargs):
         """
         Plot the meshes comprising a 2D :class:`~.MeshSeq`.
@@ -374,8 +394,10 @@ class MeshSeq:
                 solution_map = {}
                 u = {}
                 for f in self.fields:
-                    u[f] = firedrake.Function(self.function_spaces[f][0])
-                    solution_map[f] = (u[f], u[f])
+                    u = firedrake.Function(self.function_spaces[f][0], name=f)
+                    u_ = u.copy(deepcopy=True)
+                    u_.rename(f"{f}_old")
+                    solution_map[f] = (u, u_)
                 method_map = method_map()(0, solution_map)
             assert isinstance(method_map, dict), f"{method} should return a dict"
             mesh_seq_fields = set(self.fields)
