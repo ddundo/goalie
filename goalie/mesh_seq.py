@@ -382,6 +382,7 @@ class MeshSeq:
         Assert that function spaces, initial conditions, and forms are given in a
         dictionary format with :attr:`MeshSeq.fields` as keys.
         """
+        pass
         for method in ["get_function_spaces", "get_initial_condition", "get_form"]:
             if getattr(self, f"_{method}") is None:
                 continue
@@ -883,6 +884,79 @@ class MeshSeq:
             converged[first_not_converged:] = False
 
         return converged
+
+    @PETSc.Log.EventDecorator()
+    def new_fixed_point_iteration(
+        self,
+        adaptor_inner=None,
+        adaptor_outer=None,
+        update_params=None,
+        solver_kwargs={},
+        adaptor_kwargs={},
+    ):
+        r"""
+        docstring
+        """
+        # check that not both adaptor_inner and adaptor_outer are None
+        if adaptor_inner is None and adaptor_outer is None:
+            raise ValueError("Both 'adaptor_inner' and 'adaptor_outer' cannot be None.")
+        self._reset_counts()
+        self.converged_inner[:] = False
+        self.converged_outer[:] = False
+        self.check_convergence[:] = True
+
+        num_subintervals = len(self)
+
+        # TODO add params.inner and params.outer
+
+        for self.fpi_outer in range(self.params.outer.maxiter):
+            if update_params is not None:
+                update_params(self.params, self.fpi_inner, self.fpi_outer)
+            robust = self.params["convergence_criteria"] != "robust"
+
+            solver = self._solve_forward(save_solutions=True, **solver_kwargs)
+
+            for i in range(num_subintervals):
+                # 145
+                if self.converged_outer[i:] and not robust:
+                    continue
+
+                solver = self._solve_forward(
+                    save_solutions=True, solver_kwargs=solver_kwargs
+                )
+                for self.fpi_inner in range(self.params.inner.maxiter):
+                    if update_params is not None:
+                        update_params(self.params, self.fpi_inner, self.fpi_outer)
+                    adaptor_inner(self, **adaptor_kwargs)
+                    # continue_unconditionally = adaptor_inner(...)
+                    # use send here...
+                    next(solver)
+
+                    # check if converged
+                    # element count etc.
+                    # self.converged_inner[i] = ...
+
+                    # use send here to see if current solve_forward should be repeated
+                    # if not, continue to next subinterval
+                    self.converged_inner[i] = False
+
+            # continue_unconditionally = adaptor_outer(self, **adaptor_kwargs)
+            adaptor_outer(self, **adaptor_kwargs)
+
+            self.element_counts.append(self.count_elements())
+            self.vertex_counts.append(self.count_vertices())
+
+            # Check for element count convergence
+            self.converged_outer[:] = self.check_element_count_convergence()
+            if self.converged.all():
+                break
+        else:
+            for i, conv in enumerate(self.converged):
+                if not conv:
+                    pyrint(
+                        f"Failed to converge on subinterval {i} in"
+                        f" {self.params.maxiter} iterations."
+                    )
 
     @PETSc.Log.EventDecorator()
     def on_the_fly(
