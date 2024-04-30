@@ -49,12 +49,25 @@ class FunctionData(abc.ABC):
                             ]
                             for i, fs in enumerate(self.function_spaces[field])
                         ]
-                        for label in self._label_dict[field_type]
+                        for label in self.labels
                     }
                 )
-                for field, field_type in zip(tp.fields, tp.field_types)
+                for field in tp.fields
             }
         )
+
+    def fly_update(self, idx, fs):
+        self.function_spaces = fs
+        if self._data is None:
+            self._create_data()
+        tp = self.time_partition
+        for field in tp.fields:
+            for label in self.labels:
+                fs_idx = self.function_spaces[field][idx]
+                self._data[field][label][idx] = [
+                    ffunc.Function(fs_idx, name=f"{field}_{label}")
+                    for j in range(tp.num_exports_per_subinterval[idx] - 1)
+                ]
 
     @property
     def _data_by_field(self):
@@ -203,7 +216,7 @@ class IndicatorData(FunctionData):
         :arg meshes: the list of meshes used to discretise the problem in space
         """
         self._label_dict = {
-            field_type: ("error_indicator",) for field_type in ("steady", "unsteady")
+            time_dep: ("error_indicator",) for time_dep in ("steady", "unsteady")
         }
         super().__init__(
             time_partition,

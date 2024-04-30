@@ -5,6 +5,8 @@ Sequences of meshes corresponding to a :class:`~.TimePartition`.
 from collections.abc import Iterable
 
 import firedrake
+import firedrake.function as ffunc
+import firedrake.functionspace as ffs
 import numpy as np
 from animate.interpolation import transfer
 from animate.quality import QualityMeasure
@@ -189,6 +191,23 @@ class MeshSeq:
                     f"{i}: {nc:7d} cells, {nv:7d} vertices,  max aspect ratio {mar:.2f}"
                 )
             debug(100 * "-")
+        self._time = [
+            ffunc.Function(ffs.FunctionSpace(mesh, "R", 0)) for mesh in meshes
+        ]
+
+    def get_time(self, subinterval):
+        """
+        Get the time :class:`~.Function` associated with a given subinterval,
+        initialised to the value at the start of the subinterval, plus one timestep.
+        :arg subinterval: the subinterval index
+        :type subinterval: :class:`int`
+        :return: the associated $R$-space time Function
+        :rtype: :class:`~.Function`
+        """
+        start_time = self.time_partition[subinterval].start_time
+        dt = self.time_partition.timesteps[subinterval]
+        self._time[subinterval].assign(start_time + dt)
+        return self._time[subinterval]
 
     def plot(self, fig=None, axes=None, **kwargs):
         """
@@ -520,6 +539,7 @@ class MeshSeq:
 
             # Reinitialise fields and assign initial conditions
             self._reinitialise_fields(checkpoint)
+            print(i, self[i].num_vertices(), checkpoint["u"].dat.data.mean())
 
             if update_solutions:
                 # Solve sequentially between each export time
@@ -641,6 +661,95 @@ class MeshSeq:
             converged[first_not_converged:] = False
 
         return converged
+
+    def on_the_fly(self, adaptor, solver_kwargs={}):
+        tp = self.time_partition
+        self._create_solutions()
+        num_subintervals = len(self)
+
+        checkpoint = self.initial_condition
+        for i in range(num_subintervals):
+            solutions = self.solutions.extract(layout="field")
+            adaptor(self, i, self.solutions)
+            self.solutions.fly_update(i, self.function_spaces)
+
+            transferred_checkpoint = AttrDict(
+                {
+                    field: self._transfer(checkpoint[field], fs[i])
+                    for field, fs in self._fs.items()
+                }
+            )
+
+            solver_gen = self.solver(i, **solver_kwargs)
+
+            self._reinitialise_fields(transferred_checkpoint)
+            print(
+                i, self[i].num_vertices(), transferred_checkpoint["u"].dat.data.mean()
+            )
+
+            # if update_solutions:
+            # Solve sequentially between each export time
+            for j in range(tp.num_exports_per_subinterval[i] - 1):
+                for _ in range(tp.num_timesteps_per_export[i]):
+                    next(solver_gen)
+                # Update the solution data
+                for field, (f, f_) in self.fields.items():
+                    solutions[field].forward[i][j].assign(f)
+                    if not self.steady:
+                        solutions[field].forward_old[i][j].assign(f_)
+
+            # Transfer the checkpoint to the next subintervals
+            if i < num_subintervals - 1:
+                checkpoint = AttrDict(
+                    {
+                        field: self._transfer(self.fields[field][0], fs[i + 1])
+                        for field, fs in self._fs.items()
+                    }
+                )
+
+        return self.solutions
+
+    @PETSc.Log.EventDecorator()
+    def new_fixed_point_iteration(
+        self,
+        adaptor_inner=None,
+        adaptor_outer=None,
+        update_params=None,
+        solver_kwargs={},
+        adaptor_kwargs={},
+    ):
+        r"""
+        docstring
+        """
+        # check that not both adaptor_inner and adaptor_outer are None
+        if adaptor_inner is None and adaptor_outer is None:
+            raise ValueError("Both 'adaptor_inner' and 'adaptor_outer' cannot be None.")
+        self._reset_counts()
+        # self.converged_inner[:] = False
+        # self.converged_outer[:] = False
+        self.check_convergence[:] = True
+
+        num_subintervals = len(self)
+
+        # TODO add params.inner and params.outer
+
+        for self.fpi_outer in range(self.params.maxiter):
+            solver_gen = self._solve_forward(update_solutions=True, **solver_kwargs)
+            for i in range(num_subintervals):
+                for self.fpi_inner in range(1):
+                    print(self.initial_condition["u"].dat.data.mean())
+                    adaptor_inner(self, i, self.solutions, **adaptor_kwargs)
+                    self.solutions.fly_update(i, self.function_spaces)
+                    # transferred_checkpoint = AttrDict(
+                    #     {
+                    #         field: self._transfer(checkpoint[field], fs[i])
+                    #         for field, fs in self._fs.items()
+                    #     }
+                    # )
+
+                    next(solver_gen)
+
+            adaptor_outer(self, self.solutions, **adaptor_kwargs)
 
     @PETSc.Log.EventDecorator()
     def fixed_point_iteration(
