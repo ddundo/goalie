@@ -65,6 +65,7 @@ class MeshSeq:
         self._get_solver = kwargs.get("get_solver")
         self._get_bcs = kwargs.get("get_bcs")
         self._transfer_method = kwargs.get("transfer_method", "interpolate")
+        self._transfer_kwargs = kwargs.get("transfer_kwargs", {})
         self.params = kwargs.get("parameters")
         self.steady = time_partition.steady
         self.check_convergence = np.array([True] * len(self), dtype=bool)
@@ -375,7 +376,9 @@ class MeshSeq:
 
         Extra keyword arguments are passed to :func:`goalie.interpolation.transfer`.
         """
-        return transfer(source, target_space, self._transfer_method, **kwargs)
+        transfer_kwargs = kwargs.copy()
+        transfer_kwargs.update(self._transfer_kwargs)
+        return transfer(source, target_space, self._transfer_method, **transfer_kwargs)
 
     def _outputs_consistent(self):
         """
