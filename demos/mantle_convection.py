@@ -33,6 +33,7 @@
 # As always, we begin by importing Firedrake and Goalie, and defining constants.
 
 from firedrake import *
+
 from goalie_adjoint import *
 
 Ra, mu, kappa = Constant(1e4), Constant(1.0), Constant(1.0)
