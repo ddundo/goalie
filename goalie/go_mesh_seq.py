@@ -190,11 +190,13 @@ class GoalOrientedMeshSeq(AdjointMeshSeq):
             # Loop over each timestep
             for j in range(self.time_partition.num_exports_per_subinterval[i] - 1):
                 tp = self.time_partition
-                time = (
-                    tp.subintervals[i][0]
-                    + (j + 1) * tp.timesteps[i] * tp.num_timesteps_per_export[i]
-                )
-                forms = enriched_mesh_seq.form(i, mapping, err_ind_time=time)
+                # time = (
+                #     tp.subintervals[i][0]
+                #     + (j + 1) * tp.timesteps[i] * tp.num_timesteps_per_export[i]
+                # )
+                t = self.get_time(i)
+                t += j * tp.timesteps[i] * tp.num_timesteps_per_export[i]
+                forms = enriched_mesh_seq.form(i, mapping)
                 # Loop over each strongly coupled field
                 # In case of having multiple solution fields that are solved for one
                 # after another, the field that is solved for first uses the values of
