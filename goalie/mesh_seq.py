@@ -42,10 +42,13 @@ class MeshSeq:
             :meth:`~.MeshSeq.get_initial_condition`
         :kwarg get_form: a function as described in :meth:`~.MeshSeq.get_form`
         :kwarg get_solver: a function as described in :meth:`~.MeshSeq.get_solver`
-        :kwarg get_bcs: a function as described in :meth:`~.MeshSeq.get_bcs`
         :kwarg transfer_method: the method to use for transferring fields between
-            meshes. Options are "interpolate" (default) and "project"
+            meshes. Options are "project" (default) and "interpolate". See
+            :func:`animate.interpolation.transfer` for details
         :type transfer_method: :class:`str`
+        :kwarg transfer_kwargs: kwargs to pass to the chosen transfer method
+        :type transfer_kwargs: :class:`dict` with :class:`str` keys and values which may
+            take various types
         :kwarg parameters: parameters to apply to the mesh adaptation process
         :type parameters: :class:`~.AdaptParameters`
         """
@@ -63,8 +66,7 @@ class MeshSeq:
         self._get_initial_condition = kwargs.get("get_initial_condition")
         self._get_form = kwargs.get("get_form")
         self._get_solver = kwargs.get("get_solver")
-        self._get_bcs = kwargs.get("get_bcs")
-        self._transfer_method = kwargs.get("transfer_method", "interpolate")
+        self._transfer_method = kwargs.get("transfer_method", "project")
         self._transfer_kwargs = kwargs.get("transfer_kwargs", {})
         self.params = kwargs.get("parameters")
         self.steady = time_partition.steady
@@ -145,7 +147,8 @@ class MeshSeq:
         :returns: list of element counts
         :rtype: :class:`list` of :class:`int`\s
         """
-        return [mesh.num_cells() for mesh in self]  # TODO #123: make parallel safe
+        comm = firedrake.COMM_WORLD
+        return [comm.allreduce(mesh.coordinates.cell_set.size) for mesh in self]
 
     def count_vertices(self):
         r"""
@@ -154,7 +157,8 @@ class MeshSeq:
         :returns: list of vertex counts
         :rtype: :class:`list` of :class:`int`\s
         """
-        return [mesh.num_vertices() for mesh in self]  # TODO #123: make parallel safe
+        comm = firedrake.COMM_WORLD
+        return [comm.allreduce(mesh.coordinates.node_set.size) for mesh in self]
 
     def _reset_counts(self):
         """
@@ -183,13 +187,13 @@ class MeshSeq:
         self._reset_counts()
         if logger.level == DEBUG:
             for i, mesh in enumerate(meshes):
-                nc = mesh.num_cells()
-                nv = mesh.num_vertices()
+                nc = self.element_counts[0][i]
+                nv = self.vertex_counts[0][i]
                 qm = QualityMeasure(mesh)
                 ar = qm("aspect_ratio")
                 mar = ar.vector().gather().max()
                 self.debug(
-                    f"{i}: {nc:7d} cells, {nv:7d} vertices,   max aspect ratio {mar:.2f}"
+                    f"{i}: {nc:7d} cells, {nv:7d} vertices,  max aspect ratio {mar:.2f}"
                 )
             debug(100 * "-")
 
@@ -339,25 +343,6 @@ class MeshSeq:
             raise NotImplementedError("'get_solver' needs implementing.")
         return self._get_solver(self)
 
-    def get_bcs(self):
-        """
-        Get the function mapping a subinterval index to a set of Dirichlet boundary
-        conditions.
-
-        Signature for the function to be returned:
-        ```
-        :arg index: the subinterval index
-        :type index: :class:`int`
-        :return: boundary conditions
-        :rtype: :class:`~.DirichletBC` or :class:`list` thereof
-        :rtype: see docstring above
-        ```
-
-        :returns: the function for obtaining the boundary conditions
-        """
-        if self._get_bcs is not None:
-            return self._get_bcs(self)
-
     def _transfer(self, source, target_space, **kwargs):
         """
         Transfer a field between meshes using the specified transfer method.
@@ -376,6 +361,7 @@ class MeshSeq:
 
         Extra keyword arguments are passed to :func:`goalie.interpolation.transfer`.
         """
+        # Update kwargs with those specified by the user
         transfer_kwargs = kwargs.copy()
         transfer_kwargs.update(self._transfer_kwargs)
         return transfer(source, target_space, self._transfer_method, **transfer_kwargs)
@@ -486,15 +472,8 @@ class MeshSeq:
         """
         return self.get_solver()
 
-    @property
-    def bcs(self):
-        """
-        See :meth:`~.MeshSeq.get_bcs`.
-        """
-        return self.get_bcs()
-
     @PETSc.Log.EventDecorator()
-    def get_checkpoints(self, solver_kwargs={}, run_final_subinterval=False):
+    def get_checkpoints(self, solver_kwargs=None, run_final_subinterval=False):
         r"""
         Solve forward on the sequence of meshes, extracting checkpoints corresponding
         to the starting fields on each subinterval.
@@ -508,6 +487,7 @@ class MeshSeq:
         :returns: checkpoints for each subinterval
         :rtype: :class:`list` of :class:`firedrake.function.Function`\s
         """
+        solver_kwargs = solver_kwargs or {}
         N = len(self)
 
         # The first checkpoint is the initial condition
@@ -738,7 +718,7 @@ class MeshSeq:
         return self._solutions
 
     @PETSc.Log.EventDecorator()
-    def solve_forward(self, solver_kwargs={}):
+    def solve_forward(self, solver_kwargs=None):
         r"""
         Solve a forward problem on a sequence of subintervals.
 
@@ -751,6 +731,7 @@ class MeshSeq:
         :returns: the solution data of the forward solves
         :rtype: :class:`~.ForwardSolutionData`
         """
+        solver_kwargs = solver_kwargs or {}
         num_subintervals = len(self)
         P = self.time_partition
         solver = self.solver
@@ -888,86 +869,89 @@ class MeshSeq:
 
         return converged
 
-    @PETSc.Log.EventDecorator()
-    def new_fixed_point_iteration(
-        self,
-        adaptor_inner=None,
-        adaptor_outer=None,
-        update_params=None,
-        solver_kwargs={},
-        adaptor_kwargs={},
-    ):
-        r"""
-        docstring
-        """
-        # check that not both adaptor_inner and adaptor_outer are None
-        if adaptor_inner is None and adaptor_outer is None:
-            raise ValueError("Both 'adaptor_inner' and 'adaptor_outer' cannot be None.")
-        self._reset_counts()
-        self.converged_inner[:] = False
-        self.converged_outer[:] = False
-        self.check_convergence[:] = True
+    # @PETSc.Log.EventDecorator()
+    # def new_fixed_point_iteration(
+    #     self,
+    #     adaptor_inner=None,
+    #     adaptor_outer=None,
+    #     update_params=None,
+    #     solver_kwargs={},
+    #     adaptor_kwargs={},
+    # ):
+    #     r"""
+    #     docstring
+    #     """
+    #     # check that not both adaptor_inner and adaptor_outer are None
+    #     if adaptor_inner is None and adaptor_outer is None:
+    #         raise ValueError("Both 'adaptor_inner' and 'adaptor_outer' cannot be None.")
+    #     self._reset_counts()
+    #     self.converged_inner[:] = False
+    #     self.converged_outer[:] = False
+    #     self.check_convergence[:] = True
 
-        num_subintervals = len(self)
+    #     num_subintervals = len(self)
 
-        # TODO add params.inner and params.outer
+    #     # TODO add params.inner and params.outer
 
-        for self.fpi_outer in range(self.params.outer.maxiter):
-            if update_params is not None:
-                update_params(self.params, self.fpi_inner, self.fpi_outer)
-            robust = self.params["convergence_criteria"] != "robust"
+    #     for self.fpi_outer in range(self.params.outer.maxiter):
+    #         if update_params is not None:
+    #             update_params(self.params, self.fpi_inner, self.fpi_outer)
+    #         robust = self.params["convergence_criteria"] != "robust"
 
-            solver = self._solve_forward(save_solutions=True, **solver_kwargs)
+    #         solver = self._solve_forward(save_solutions=True, **solver_kwargs)
 
-            for i in range(num_subintervals):
-                # 145
-                if self.converged_outer[i:] and not robust:
-                    continue
+    #         for i in range(num_subintervals):
+    #             # 145
+    #             if self.converged_outer[i:] and not robust:
+    #                 continue
 
-                solver = self._solve_forward(
-                    save_solutions=True, solver_kwargs=solver_kwargs
-                )
-                for self.fpi_inner in range(self.params.inner.maxiter):
-                    if update_params is not None:
-                        update_params(self.params, self.fpi_inner, self.fpi_outer)
-                    adaptor_inner(self, **adaptor_kwargs)
-                    # continue_unconditionally = adaptor_inner(...)
-                    # use send here...
-                    next(solver)
+    #             solver = self._solve_forward(
+    #                 save_solutions=True, solver_kwargs=solver_kwargs
+    #             )
+    #             for self.fpi_inner in range(self.params.inner.maxiter):
+    #                 if update_params is not None:
+    #                     update_params(self.params, self.fpi_inner, self.fpi_outer)
+    #                 adaptor_inner(self, **adaptor_kwargs)
+    #                 # continue_unconditionally = adaptor_inner(...)
+    #                 # use send here...
+    #                 next(solver)
 
-                    # check if converged
-                    # element count etc.
-                    # self.converged_inner[i] = ...
+    #                 # check if converged
+    #                 # element count etc.
+    #                 # self.converged_inner[i] = ...
 
-                    # use send here to see if current solve_forward should be repeated
-                    # if not, continue to next subinterval
-                    self.converged_inner[i] = False
+    #                 # use send here to see if current solve_forward should be repeated
+    #                 # if not, continue to next subinterval
+    #                 self.converged_inner[i] = False
 
-            # continue_unconditionally = adaptor_outer(self, **adaptor_kwargs)
-            adaptor_outer(self, **adaptor_kwargs)
+    #         # continue_unconditionally = adaptor_outer(self, **adaptor_kwargs)
+    #         adaptor_outer(self, **adaptor_kwargs)
 
-            self.element_counts.append(self.count_elements())
-            self.vertex_counts.append(self.count_vertices())
+    #         self.element_counts.append(self.count_elements())
+    #         self.vertex_counts.append(self.count_vertices())
 
-            # Check for element count convergence
-            self.converged_outer[:] = self.check_element_count_convergence()
-            if self.converged.all():
-                break
-        else:
-            for i, conv in enumerate(self.converged):
-                if not conv:
-                    pyrint(
-                        f"Failed to converge on subinterval {i} in"
-                        f" {self.params.maxiter} iterations."
-                    )
+    #         # Check for element count convergence
+    #         self.converged_outer[:] = self.check_element_count_convergence()
+    #         if self.converged.all():
+    #             break
+    #     else:
+    #         for i, conv in enumerate(self.converged):
+    #             if not conv:
+    #                 pyrint(
+    #                     f"Failed to converge on subinterval {i} in"
+    #                     f" {self.params.maxiter} iterations."
+    #                 )
 
     @PETSc.Log.EventDecorator()
     def on_the_fly(
-        self, adaptor, update_params=None, solver_kwargs={}, adaptor_kwargs={}
+        self, adaptor, update_params=None, solver_kwargs=None, adaptor_kwargs=None
     ):
         r"""
         On the fly adaptation method.
         """
+        solver_kwargs = solver_kwargs or {}
+        adaptor_kwargs = adaptor_kwargs or {}
+
         self._reset_counts()
         self.converged[:] = False
         self.check_convergence[:] = True
@@ -1069,7 +1053,7 @@ class MeshSeq:
 
     @PETSc.Log.EventDecorator()
     def fixed_point_iteration(
-        self, adaptor, update_params=None, solver_kwargs={}, adaptor_kwargs={}
+        self, adaptor, update_params=None, solver_kwargs=None, adaptor_kwargs=None
     ):
         r"""
         Apply mesh adaptation using a fixed point iteration loop approach.
@@ -1091,12 +1075,15 @@ class MeshSeq:
         :rtype: :class:`~.ForwardSolutionData`
         """
         # TODO #124: adaptor no longer needs solution data to be passed explicitly
-        self.element_counts = [self.count_elements()]
-        self.vertex_counts = [self.count_vertices()]
+        solver_kwargs = solver_kwargs or {}
+        adaptor_kwargs = adaptor_kwargs or {}
+
+        self._reset_counts()
         self.converged[:] = False
         self.check_convergence[:] = True
 
-        for self.fp_iteration in range(self.params.maxiter):
+        for fp_iteration in range(self.params.maxiter):
+            self.fp_iteration = fp_iteration
             if update_params is not None:
                 update_params(self.params, self.fp_iteration)
 
