@@ -747,14 +747,20 @@ class MeshSeq:
         else:
             pyadjoint.continue_annotation()
 
+        pyadjoint.pause_annotation()
+
         # Loop over the subintervals
         checkpoint = self.initial_condition
         for i in range(num_subintervals):
             stride = P.num_timesteps_per_export[i]
             num_exports = P.num_exports_per_subinterval[i]
 
+            # continue annotating
+            pyadjoint.continue_annotation()
             # Annotate tape on current subinterval
             checkpoint = solver(i, checkpoint, **solver_kwargs)
+            # pause annotating
+            pyadjoint.pause_annotation()
 
             # Loop over prognostic variables
             for field, fs in self.function_spaces.items():
@@ -973,6 +979,8 @@ class MeshSeq:
         else:
             pyadjoint.continue_annotation()
 
+        pyadjoint.pause_annotation()
+
         # Loop over the subintervals
         checkpoint = self.initial_condition
         for i in range(num_subintervals):
@@ -997,8 +1005,10 @@ class MeshSeq:
                     }
                 )
 
+                pyadjoint.continue_annotation()
                 # Annotate tape on current subinterval
                 next_checkpoint = solver(i, transferred_checkpoint, **solver_kwargs)
+                pyadjoint.pause_annotation()
 
                 # Loop over prognostic variables
                 # TODO: same as in solve_forward. Separate it out
