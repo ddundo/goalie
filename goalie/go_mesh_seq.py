@@ -6,7 +6,7 @@ from collections.abc import Iterable
 
 import numpy as np
 import ufl
-from animate.interpolation import interpolate
+from animate.interpolation import interpolate, project
 from firedrake import Function, FunctionSpace, MeshHierarchy, TransferManager
 from firedrake.petsc import PETSc
 
@@ -236,7 +236,8 @@ class GoalOrientedMeshSeq(AdjointMeshSeq):
                     indi_e = indicator_fn(forms[f], u_star_e[f])
 
                     # Transfer back to the base space
-                    indi = self._transfer(indi_e, P0_spaces[i], bounded=False)
+                    # indi = self._transfer(indi_e, P0_spaces[i])
+                    indi = project(indi_e, P0_spaces[i])
                     indi.interpolate(abs(indi))
                     self.indicators[f][i][j].interpolate(ufl.max_value(indi, 1.0e-16))
 
