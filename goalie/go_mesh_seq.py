@@ -72,7 +72,8 @@ class GoalOrientedMeshSeq(AdjointMeshSeq):
             qoi_type=self.qoi_type,
             parameters=self.params,
             transfer_method=self._transfer_method,
-            transfer_kwargs=self._transfer_kwargs,
+            # transfer_kwargs=self._transfer_kwargs,
+            transfer_kwargs={"bounded": enrichment_method == "h"},
         )
         enriched_mesh_seq._update_function_spaces()
 
